@@ -98,9 +98,9 @@ class TestFailures:
             generate(FakeClaude(api_error(exc_class, status)), summaries)
 
     def test_connection_errors_become_narrative_errors(self, summaries):
-        import httpx2
+        from tests.fakes import httpx
 
-        exc = anthropic.APIConnectionError(request=httpx2.Request("POST", "https://x"))
+        exc = anthropic.APIConnectionError(request=httpx.Request("POST", "https://x"))
         with pytest.raises(NarrativeGenerationError, match="reach"):
             generate(FakeClaude(exc), summaries)
 

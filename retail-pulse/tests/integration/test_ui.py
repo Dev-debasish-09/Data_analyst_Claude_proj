@@ -7,6 +7,7 @@ a real deployment is configured. The Claude call is stubbed.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 import streamlit as st
@@ -15,7 +16,7 @@ from streamlit.testing.v1 import AppTest
 from config.settings import get_settings
 from src.narrative import NarrativeGenerator, NarrativeReport
 
-APP = "src/ui/app.py"
+APP = Path(__file__).resolve().parents[2] / "src" / "ui" / "app.py"  # absolute: works from any cwd
 
 
 @pytest.fixture(autouse=True)
@@ -31,7 +32,7 @@ def app_env(monkeypatch, db_path):
 
 
 def launch() -> AppTest:
-    return AppTest.from_file(APP, default_timeout=90).run()
+    return AppTest.from_file(str(APP), default_timeout=90).run()
 
 
 def cards(at: AppTest) -> dict:
@@ -105,9 +106,7 @@ def test_the_data_sent_to_claude_is_disclosed_and_aggregated():
 
 def test_the_ui_layer_only_imports_analysis_and_narrative():
     """Architecture rule: no business logic, no direct data or API access in src/ui."""
-    from pathlib import Path
-
-    source = Path(APP).read_text(encoding="utf-8")
+    source = APP.read_text(encoding="utf-8")
     imported = set(re.findall(r"^\s*from (src\.\w+|config\.\w+) import", source, re.MULTILINE))
     assert imported <= {"src.analysis", "src.narrative", "config.settings"}
     assert "anthropic" not in source and "sqlite3" not in source

@@ -22,8 +22,14 @@ if str(_ROOT) not in sys.path:  # lets `streamlit run src/ui/app.py` find the pa
     sys.path.insert(0, str(_ROOT))
 
 from config.settings import get_settings  # noqa: E402
-from src.analysis import AnalysisError, WeeklyAnalysis, analyze_week, as_dict  # noqa: E402
-from src.analysis import available_regions, available_weeks  # noqa: E402
+from src.analysis import (  # noqa: E402
+    AnalysisError,
+    WeeklyAnalysis,
+    analyze_week,
+    as_dict,
+    available_regions,
+    available_weeks,
+)
 from src.narrative import (  # noqa: E402
     NarrativeConfigError,
     NarrativeGenerationError,
@@ -74,7 +80,8 @@ def _metric_cards(a: WeeklyAnalysis) -> None:
     if stock.has_history:
         c2.metric("Suspected stockouts", f"{stock.n_skus_affected} SKUs",
                   f"{_money(stock.est_sales_at_risk)} weekly sales at risk", delta_color="off",
-                  help="SKUs that normally sell steadily but sold zero. Inferred from sales, not inventory.")  # fmt: skip
+                  help="SKUs that normally sell steadily but sold zero. "
+                       "Inferred from sales, not inventory.")  # fmt: skip
     else:
         c2.metric("Suspected stockouts", "n/a", "not enough history", delta_color="off")
 

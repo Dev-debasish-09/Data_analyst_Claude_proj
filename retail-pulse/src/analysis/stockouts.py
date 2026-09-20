@@ -34,8 +34,9 @@ def detect_stockouts(
       * Slow sellers hit zero by chance, and there are thousands of store-SKU pairs, so a zero is
         only treated as a stockout when it is statistically implausible. Two tiers:
           1. STORE tier: a store's own baseline is at least `min_baseline_units` (default 15)
-             and it sold zero. At 15 units a week, a chance zero is under 0.0001%. Tuned on the synthetic data: 15 gave no false alarms
-             in 45 normal weeks, 10 gave 5 alarm weeks; the cost is missing the slowest planted SKUs.
+             and it sold zero. At 15 units a week, a chance zero is under 0.0001%. Tuned on the
+             synthetic data: 15 gave no false alarms in 45 normal weeks, 10 gave 5 alarm weeks;
+             the cost is missing the slowest planted SKUs.
           2. REGION tier: the SKU sold zero across ALL stores in a region while the region's
              combined baseline is at least `min_baseline_units`. Individually each store may
              sell too little to be conclusive, but zero everywhere at once is strong evidence
@@ -86,7 +87,7 @@ def detect_stockouts(
     region_regular = region_units.where(~on_promo.groupby(keys).any())
     region_hit = (region_regular[history].median(axis=1) >= min_baseline_units) & (region_units[week] == 0)
     region_keys = set(region_hit[region_hit].index)
-    in_hit_region = [(r, u) in region_keys for r, u in zip(store_regions, upc_ids)]
+    in_hit_region = [(r, u) in region_keys for r, u in zip(store_regions, upc_ids, strict=True)]
     region_tier = pd.Series(in_hit_region, index=units.index) & (hist_median >= 1) & zero_now
 
     flagged = store_tier | region_tier

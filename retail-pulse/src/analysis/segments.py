@@ -60,7 +60,8 @@ def segment_basket_behavior(
             prior_avg_basket_value=None if prior_val is None else money(prior_val),
             basket_value_change_pct=pct_change(avg, prior_val),
             avg_items_per_basket=None if lines is None else round(float(lines["lines"]) / n, 1),
-            promo_item_share_pct=None if lines is None else round(float(lines["promo_lines"]) / float(lines["lines"]) * 100, 1),
+            promo_item_share_pct=None if lines is None
+            else round(float(lines["promo_lines"]) / float(lines["lines"]) * 100, 1),
         ))  # fmt: skip
     rows.sort(key=lambda s: -s.total_sales)
     return SegmentBehaviorSummary(week, prior, region, tuple(rows))

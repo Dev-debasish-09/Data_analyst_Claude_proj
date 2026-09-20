@@ -70,7 +70,7 @@ def planted(q) -> PlantedAnomalies:
         stockout_region=stock["region"].iloc[0],
         stockout_start_week=int(stock["start_week"].iloc[0]),
         stockout_end_week=int(stock["end_week"].iloc[0]),
-        stockout_pairs=frozenset(zip(stock["store_id"], stock["upc"])),
+        stockout_pairs=frozenset(zip(stock["store_id"], stock["upc"], strict=True)),
         stockout_upcs=frozenset(int(u) for u in stock["upc"]),
         no_promo_week=int(no_promo["start_week"].iloc[0]),
     )

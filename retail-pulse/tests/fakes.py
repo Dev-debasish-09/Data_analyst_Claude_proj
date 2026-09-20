@@ -7,7 +7,10 @@ import types
 from collections.abc import Callable
 from typing import Any
 
-import httpx2 as httpx
+try:  # anthropic 1.x is built on httpx2; 0.x used httpx
+    import httpx2 as httpx
+except ImportError:  # pragma: no cover
+    import httpx
 
 PAYLOAD_HEADER = "Weekly retail metrics (JSON):\n"
 

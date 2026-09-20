@@ -37,7 +37,7 @@ class TestNormalWeek:
                      WHERE d.week BETWEEN :a AND :b GROUP BY i.store_id, i.upc, d.week""",
                   a=history[0], b=week)  # fmt: skip
         sold = {(r.store_id, r.upc, r.week): r.u for r in units.itertuples()}
-        on_promo = set(zip(promos["store_id"], promos["upc"], promos["week"]))
+        on_promo = set(zip(promos["store_id"], promos["upc"], promos["week"], strict=True))
 
         promo_units = baseline_units = evaluated = 0
         for store, upc in promos.loc[promos["week"] == week, ["store_id", "upc"]].itertuples(index=False):

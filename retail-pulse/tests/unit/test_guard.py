@@ -71,7 +71,9 @@ class TestRejectsRowDataSmuggledIntoASummary:
         with pytest.raises(RawDataBoundaryError, match="record-level list"):
             to_payload(self._with(analysis, top_skus=tuple(range(50))))
 
-    @pytest.mark.parametrize("key", ["household_id", "basket_ids", "customer", "loyalty_card", "trans_time", "store_id"])
+    @pytest.mark.parametrize(
+        "key", ["household_id", "basket_ids", "customer", "loyalty_card", "trans_time", "store_id"]
+    )
     def test_identifier_like_keys(self, analysis, key):
         with pytest.raises(RawDataBoundaryError, match="identifier"):
             to_payload(self._with(analysis, by_region=({key: 1},)))

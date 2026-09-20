@@ -55,7 +55,7 @@ def promo_lift(
     )
 
     # Baseline: full pair x history-week grid (missing = zero sales), minus weeks on promo.
-    grid = pairs[["store_id", "upc"]].merge(pd.DataFrame({"week": history}), how="cross")
+    grid = pairs[["store_id", "upc"]].merge(pd.DataFrame({"week": pd.Series(history, dtype="int64")}), how="cross")
     grid = grid.merge(weekly, on=["store_id", "upc", "week"], how="left").fillna({"units": 0, "sales": 0})
     hist_promos = repo.get_promos(weeks=history, store_ids=store_ids, upcs=upcs)[["store_id", "upc", "week"]]
     grid = grid.merge(hist_promos.assign(on_promo=True), on=["store_id", "upc", "week"], how="left")

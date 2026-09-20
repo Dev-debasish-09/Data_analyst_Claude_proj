@@ -40,7 +40,8 @@ def _stand_in_model(request: dict):
     if stock["n_skus_affected"]:
         top = stock["top_skus"][0]
         cause = (f"Likely out-of-stock products: {stock['n_skus_affected']} SKUs, led by "
-                 f"{top['department']} ({top['commodity']}), sold zero in {stock['n_stores_affected']} stores.")  # fmt: skip
+                 f"{top['department']} ({top['commodity']}), sold zero in "
+                 f"{stock['n_stores_affected']} stores.")  # fmt: skip
     else:
         cause = "No stockouts were detected, so the change looks demand-driven."
     if promo["has_promos"]:
@@ -59,11 +60,13 @@ def run_pipeline(repo, week: int, region: str | None):
     return analysis, client, report
 
 
-class TestPlantedStockoutWeek:
-    @pytest.fixture(scope="class")
-    def result(self, repo, planted):
-        return run_pipeline(repo, planted.stockout_start_week + 1, planted.stockout_region)
+@pytest.fixture(scope="module")
+def result(repo, planted):
+    """One pipeline run over the planted stockout week, shared by the tests below."""
+    return run_pipeline(repo, planted.stockout_start_week + 1, planted.stockout_region)
 
+
+class TestPlantedStockoutWeek:
     def test_report_has_the_required_shape(self, result):
         _, _, report = result
         assert isinstance(report, NarrativeReport)

@@ -257,14 +257,14 @@ def generate_transactions(rng, lookup, stores, upcs, households, promos, ground_
             basket_id += n_b
             hours = rng.choice(np.arange(8, 22), size=n_b, p=hour_p)
             trans_time = [f"{h:02d}:{m:02d}:{s:02d}" for h, m, s in zip(
-                hours, rng.integers(0, 60, n_b), rng.integers(0, 60, n_b))]  # fmt: skip
+                hours, rng.integers(0, 60, n_b), rng.integers(0, 60, n_b), strict=True)]  # fmt: skip
 
             # Item weights for this store-week: popularity x dept season x promo lift x availability.
             w = popularity * dept_seasonality(upc_dept, week)
             promo_pct = np.zeros(n_upcs)
             g = promo_by_key.get((store.store_id, week))
             if g is not None:
-                for u, pct in zip(g["upc"], g["discount_pct"]):
+                for u, pct in zip(g["upc"], g["discount_pct"], strict=True):
                     promo_pct[upc_pos[u]] = pct
             promoted = promo_pct > 0
             w = w * np.where(promoted, 1 + 12 * promo_pct, 1.0)  # ~3x-5x lift at 20-35% off
