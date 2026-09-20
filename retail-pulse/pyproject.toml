@@ -29,7 +29,11 @@ include = ["src*", "config*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-ra"
+markers = [
+    "live: calls the real Claude API; runs only when ANTHROPIC_API_KEY is set (costs money)",
+]
 
 [tool.ruff]
 line-length = 100

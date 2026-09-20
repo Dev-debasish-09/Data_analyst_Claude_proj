@@ -327,8 +327,33 @@ def write_database(path: Path, tables: dict[str, pd.DataFrame]) -> None:
             tables[name].to_sql(name, conn, if_exists="append", index=False, chunksize=50_000)
 
 
+def generate_database(out: Path, seed: int = 42) -> dict[str, pd.DataFrame]:
+    """Build the full synthetic dataset and write it to `out` (which must not exist).
+
+    Pure generation with no environment checks, so tests can build a throwaway database in a
+    temp directory. The CLI (`main`) adds the dev-only guard and overwrite handling.
+    """
+    rng = np.random.default_rng(seed)
+    lookup = build_lookup_day()
+    stores = build_stores(rng)
+    upcs = build_upcs(rng)
+    households = build_households(rng)
+    promos = build_promos(rng, upcs, stores)
+    truth: list[tuple] = []
+    hdr, itm = generate_transactions(rng, lookup, stores, upcs, households, promos, truth)
+    truth_df = pd.DataFrame(truth, columns=["anomaly_type", "region", "store_id", "upc",
+                                            "start_week", "end_week", "note"])  # fmt: skip
+
+    tables = {
+        "lookup_day": lookup, "store": stores, "upc": upcs, "household_segmentation": households,
+        "promo": promos, "txn_hdr": hdr, "txn_itm": itm, "dev_ground_truth": truth_df,
+    }  # fmt: skip
+    write_database(out, tables)
+    return tables
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--output", help="SQLite file path (default: from RETAIL_PULSE_DB_URL)")
     parser.add_argument("--seed", type=int, default=42, help="RNG seed for reproducible data")
     parser.add_argument("--force", action="store_true", help="Overwrite an existing database")
@@ -340,25 +365,10 @@ def main() -> None:
             raise SystemExit(f"{out} already exists; pass --force to overwrite.")
         out.unlink()
 
-    rng = np.random.default_rng(args.seed)
-    lookup = build_lookup_day()
-    stores = build_stores(rng)
-    upcs = build_upcs(rng)
-    households = build_households(rng)
-    promos = build_promos(rng, upcs, stores)
-    truth: list[tuple] = []
-    hdr, itm = generate_transactions(rng, lookup, stores, upcs, households, promos, truth)
-    truth_df = pd.DataFrame(truth, columns=["anomaly_type", "region", "store_id", "upc",
-                                            "start_week", "end_week", "note"])  # fmt: skip
-
-    write_database(out, {
-        "lookup_day": lookup, "store": stores, "upc": upcs, "household_segmentation": households,
-        "promo": promos, "txn_hdr": hdr, "txn_itm": itm, "dev_ground_truth": truth_df,
-    })  # fmt: skip
+    tables = generate_database(out, args.seed)
     print(f"Wrote {out} (seed={args.seed})")
-    for name, df in [("txn_hdr", hdr), ("txn_itm", itm), ("promo", promos), ("upc", upcs),
-                     ("store", stores), ("household_segmentation", households)]:  # fmt: skip
-        print(f"  {name:<24}{len(df):>10,} rows")
+    for name in ["txn_hdr", "txn_itm", "promo", "upc", "store", "household_segmentation"]:
+        print(f"  {name:<24}{len(tables[name]):>10,} rows")
 
 
 if __name__ == "__main__":
