@@ -10,6 +10,7 @@ import pytest
 from config.settings import Environment, Settings
 from src.analysis import analyze_week
 from src.narrative import (
+    ClaudeProvider,
     NarrativeConfigError,
     NarrativeGenerationError,
     NarrativeGenerator,
@@ -24,7 +25,7 @@ def summaries(repo):
 
 
 def settings(key: str | None = "sk-test") -> Settings:
-    return Settings(Environment.DEV, "sqlite:///x", key, "test-model", "DEBUG")
+    return Settings(Environment.DEV, "sqlite:///x", key, "test-model", "DEBUG", narrative_provider="claude")
 
 
 def generate(client: FakeClaude, summaries) -> NarrativeReport:
@@ -117,6 +118,6 @@ class TestCredentials:
             generator.generate(summaries)
 
     def test_the_real_client_is_built_with_retries_and_a_timeout(self):
-        client = NarrativeGenerator(settings("sk-test"))._get_client()
+        client = ClaudeProvider(settings("sk-test"))._get_client()
         assert client.max_retries >= 2
         assert client.timeout is not None

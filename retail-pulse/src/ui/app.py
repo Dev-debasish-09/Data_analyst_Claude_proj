@@ -3,7 +3,7 @@
 Run from the project root:  streamlit run src/ui/app.py
 
 Presentation only. This module calls `src.analysis` and `src.narrative` and formats what they
-return; it holds no business logic and never touches the data layer or the Claude API directly.
+return; it holds no business logic and never touches the data layer or any model directly.
 The analyst report is generated on demand (button), not on every widget change, because each
 report is a paid API call.
 """
@@ -35,6 +35,7 @@ from src.narrative import (  # noqa: E402
     NarrativeGenerationError,
     NarrativeGenerator,
     RawDataBoundaryError,
+    describe_provider,
     to_payload,
 )
 
@@ -139,14 +140,16 @@ def _details(a: WeeklyAnalysis) -> None:
 def _narrative_section(a: WeeklyAnalysis) -> None:
     st.subheader("Analyst report")
     key = (a.week, a.region)
+    engine = describe_provider(get_settings())
+    st.caption(f"Report engine: {engine}")
 
     if st.button("Generate analyst report", type="primary",
-                 help="Sends only the aggregated figures above to Claude (one paid API call)."):  # fmt: skip
+                 help="Only the aggregated figures above are used, never raw records."):  # fmt: skip
         try:
-            with st.spinner("Writing the report..."):
+            with st.spinner("Writing the report (the first run loads the model and can take a minute)..."):
                 st.session_state["report"] = (key, NarrativeGenerator().generate(a.summaries()))
         except NarrativeConfigError as exc:
-            st.warning(f"The report needs an Anthropic API key. {exc}")
+            st.warning(f"The report engine is not ready. {exc}")
         except RawDataBoundaryError as exc:
             st.error(f"Blocked by the data-boundary guard: {exc}")
         except NarrativeGenerationError as exc:
@@ -161,7 +164,7 @@ def _narrative_section(a: WeeklyAnalysis) -> None:
         for i, action in enumerate(report.recommended_actions, start=1):
             st.markdown(f"{i}. {action}")
 
-    with st.expander("What gets sent to Claude (aggregated figures only)"):
+    with st.expander("What gets sent to the report engine (aggregated figures only)"):
         try:
             st.json(json.loads(json.dumps(to_payload(a.summaries()))), expanded=False)
         except RawDataBoundaryError as exc:

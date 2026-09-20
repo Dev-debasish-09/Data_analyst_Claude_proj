@@ -21,7 +21,7 @@ from src.analysis import analyze_week
 from src.narrative import NarrativeGenerator, NarrativeReport
 from tests.fakes import FakeClaude, text_response
 
-SETTINGS = Settings(Environment.DEV, "sqlite:///x", "sk-test", "test-model", "DEBUG")
+SETTINGS = Settings(Environment.DEV, "sqlite:///x", "sk-test", "test-model", "DEBUG", narrative_provider="claude")
 
 
 def _stand_in_model(request: dict):

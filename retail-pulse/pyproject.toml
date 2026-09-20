@@ -17,6 +17,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Free local report engine (Hugging Face). Heavy (PyTorch), so it is opt-in: pip install -e ".[hf]"
+hf = [
+    "transformers>=4.40",
+    "torch>=2.2",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
@@ -33,6 +38,7 @@ pythonpath = ["."]
 addopts = "-ra"
 markers = [
     "live: calls the real Claude API; runs only when ANTHROPIC_API_KEY is set (costs money)",
+    "local_model: downloads and runs a real Hugging Face model (GBs, slow); opt-in only",
 ]
 
 [tool.ruff]

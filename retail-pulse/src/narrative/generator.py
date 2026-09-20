@@ -1,62 +1,75 @@
-"""Generates the plain-English weekly report by calling the Claude API.
+"""Generates the plain-English weekly report from aggregated summaries.
 
-Data boundary: this is the ONLY module that talks to the API, and it accepts only the
-pre-aggregated summary objects from `src.analysis`. The guard runs before any network call.
+Data boundary: this is the ONLY entry point to a report-writing engine, and it accepts only the
+pre-aggregated summary objects from `src.analysis`. The guard runs first, before any provider is
+created, any model is loaded or any network call is made. That holds for every provider.
+
+Engines (see `providers.py`): Claude via the Anthropic API, or a small local Hugging Face model.
 
 Reliability:
-  * Transient failures (429, 5xx, timeouts, connection errors) are retried by the SDK with
-    exponential backoff (`max_retries`).
-  * A report that comes back malformed (bad JSON, wrong number of actions, empty fields) is
+  * Provider-level failures (rate limits, timeouts, refusals, missing key, model load errors)
+    surface as `NarrativeGenerationError` / `NarrativeConfigError`; callers never see SDK types.
+  * A report that comes back unusable (not JSON, empty fields, not exactly 3 actions) is
     re-requested up to `MAX_REPORT_ATTEMPTS` times.
-  * Everything else (auth errors, bad requests, refusals, exhausted retries) surfaces as a
-    `NarrativeGenerationError` so callers never see SDK-specific exceptions.
 
-Audit: the exact aggregated payload sent is logged to `retail_pulse.narrative.audit`. Raw
-records are never logged because they never get here.
+Audit: the exact aggregated payload sent is logged to `retail_pulse.narrative.audit`, with the
+engine name. Raw records are never logged because they never get here.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 import anthropic
 
 from config.settings import Settings, get_settings
-from src.narrative.errors import NarrativeConfigError, NarrativeGenerationError
+from src.narrative.errors import NarrativeGenerationError
 from src.narrative.guard import to_payload
 from src.narrative.models import NarrativeReport
-from src.narrative.prompts import REPORT_SCHEMA, SYSTEM_PROMPT, build_user_prompt
+from src.narrative.providers import ClaudeProvider, NarrativeProvider, create_provider
 
 audit_log = logging.getLogger("retail_pulse.narrative.audit")
 log = logging.getLogger(__name__)
 
-MAX_SDK_RETRIES = 3  # backoff on 429 / 5xx / timeouts / connection errors
 MAX_REPORT_ATTEMPTS = 2  # re-ask when the returned report is unusable
-REQUEST_TIMEOUT_SECONDS = 60.0
-MAX_TOKENS = 2000
 N_ACTIONS = 3
 
 
 class NarrativeGenerator:
     """Turns analysis summaries into a `NarrativeReport`."""
 
-    def __init__(self, settings: Settings | None = None, client: anthropic.Anthropic | None = None):
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        client: anthropic.Anthropic | None = None,
+        provider: NarrativeProvider | None = None,
+    ):
+        """`provider` overrides the configured engine; `client` injects an Anthropic client
+        (both are for tests). By default the engine comes from `settings`."""
         self._settings = settings or get_settings()
-        self._client = client  # injected in tests; otherwise built lazily so a missing key
-        # only fails when a report is actually requested
+        if provider is None and client is not None:
+            provider = ClaudeProvider(self._settings, client)
+        self._provider = provider
+
+    @property
+    def provider(self) -> NarrativeProvider:
+        if self._provider is None:
+            self._provider = create_provider(self._settings)
+        return self._provider
 
     def generate(self, summaries: Any) -> NarrativeReport:
         """Produce a report from one summary or a list of summaries (one per metric)."""
-        payload = to_payload(summaries)  # raises RawDataBoundaryError before any network call
-        audit_log.info("Sending aggregated payload to Claude API: %s",
+        payload = to_payload(summaries)  # raises RawDataBoundaryError before anything else happens
+        provider = self.provider
+        audit_log.info("Sending aggregated payload to %s: %s", provider.name,
                        json.dumps(payload, sort_keys=True))  # fmt: skip
-        client = self._get_client()
 
         last_problem = ""
         for attempt in range(1, MAX_REPORT_ATTEMPTS + 1):
-            text = self._call_api(client, payload)
+            text = provider.complete(payload, attempt)
             try:
                 return _parse_report(text)
             except ValueError as exc:
@@ -64,56 +77,21 @@ class NarrativeGenerator:
                 log.warning("Unusable report (attempt %d/%d): %s", attempt, MAX_REPORT_ATTEMPTS, exc)
         raise NarrativeGenerationError(f"Model returned an unusable report: {last_problem}")
 
-    # ---- internals ------------------------------------------------------------------
-    def _get_client(self) -> anthropic.Anthropic:
-        if self._client is None:
-            key = self._settings.anthropic_api_key
-            if not key:
-                raise NarrativeConfigError(
-                    "ANTHROPIC_API_KEY is not set. Set it in the environment (see config/.env.example)."
-                )
-            self._client = anthropic.Anthropic(
-                api_key=key, max_retries=MAX_SDK_RETRIES, timeout=REQUEST_TIMEOUT_SECONDS
-            )
-        return self._client
 
-    def _call_api(self, client: anthropic.Anthropic, payload: dict[str, Any]) -> str:
-        try:
-            response = client.messages.create(
-                model=self._settings.model,
-                max_tokens=MAX_TOKENS,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": build_user_prompt(payload)}],
-                output_config={"format": {"type": "json_schema", "schema": REPORT_SCHEMA}},
-            )
-        except anthropic.AuthenticationError as exc:
-            raise NarrativeGenerationError("Anthropic rejected the API key (authentication failed).") from exc
-        except anthropic.PermissionDeniedError as exc:
-            raise NarrativeGenerationError("The API key lacks permission for this request.") from exc
-        except anthropic.NotFoundError as exc:
-            raise NarrativeGenerationError(
-                f"Model {self._settings.model!r} was not found; check RETAIL_PULSE_MODEL."
-            ) from exc
-        except anthropic.BadRequestError as exc:
-            raise NarrativeGenerationError(f"The API rejected the request: {exc.message}") from exc
-        except anthropic.RateLimitError as exc:
-            raise NarrativeGenerationError("Rate limited by the API after retries; try again later.") from exc
-        except anthropic.APIConnectionError as exc:  # includes timeouts
-            raise NarrativeGenerationError("Could not reach the Anthropic API after retries.") from exc
-        except anthropic.APIStatusError as exc:
-            raise NarrativeGenerationError(f"Anthropic API error ({exc.status_code}) after retries.") from exc
+_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
-        if response.stop_reason == "refusal":
-            raise NarrativeGenerationError("The model declined to produce this report.")
-        if response.stop_reason == "max_tokens":
-            raise NarrativeGenerationError("The report was cut off (max_tokens); it was not used.")
-        return next((b.text for b in response.content if b.type == "text"), "")
+
+def _extract_json(text: str) -> str:
+    """Small models often wrap JSON in code fences or add a sentence around it; peel that off."""
+    cleaned = _FENCE.sub("", text.strip())
+    start, end = cleaned.find("{"), cleaned.rfind("}")
+    return cleaned[start : end + 1] if start != -1 and end > start else cleaned
 
 
 def _parse_report(text: str) -> NarrativeReport:
     """Validate the model's JSON. Raises ValueError with a reason when it is unusable."""
     try:
-        data = json.loads(text)
+        data = json.loads(_extract_json(text))
     except json.JSONDecodeError as exc:
         raise ValueError(f"not valid JSON ({exc.msg})") from exc
     if not isinstance(data, dict):

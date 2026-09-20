@@ -34,6 +34,8 @@ class ConfigError(RuntimeError):
 
 _DEFAULT_DEV_DB_URL = "sqlite:///./local_dev.db"
 _DEFAULT_MODEL = "claude-sonnet-5"
+_DEFAULT_HF_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"  # small open model that runs on a laptop CPU
+NARRATIVE_PROVIDERS = ("auto", "claude", "huggingface")
 _DEFAULT_LOG_LEVEL = {
     Environment.DEV: "DEBUG",
     Environment.STAGING: "INFO",
@@ -48,16 +50,29 @@ class Settings:
     anthropic_api_key: str | None
     model: str
     log_level: str
+    narrative_provider: str = "auto"  # auto | claude | huggingface
+    hf_model: str = _DEFAULT_HF_MODEL
 
     @property
     def is_dev(self) -> bool:
         return self.env is Environment.DEV
 
+    @property
+    def resolved_provider(self) -> str:
+        """Which engine writes the report. `auto` = Claude when a key is set, else a local
+        Hugging Face model in dev. Staging/prod stay on Claude unless explicitly configured."""
+        if self.narrative_provider != "auto":
+            return self.narrative_provider
+        if self.anthropic_api_key:
+            return "claude"
+        return "huggingface" if self.is_dev else "claude"
+
     def __repr__(self) -> str:  # never leak secrets into logs
         key = "***" if self.anthropic_api_key else None
         return (
             f"Settings(env={self.env.value!r}, db_url={_mask_url_password(self.db_url)!r}, "
-            f"anthropic_api_key={key!r}, model={self.model!r}, log_level={self.log_level!r})"
+            f"anthropic_api_key={key!r}, model={self.model!r}, log_level={self.log_level!r}, "
+            f"narrative_provider={self.narrative_provider!r}, hf_model={self.hf_model!r})"
         )
 
 
@@ -76,15 +91,20 @@ def load_settings() -> Settings:
 
     db_url = os.getenv("RETAIL_PULSE_DB_URL")
     api_key = os.getenv("ANTHROPIC_API_KEY") or None
+    provider = os.getenv("RETAIL_PULSE_NARRATIVE_PROVIDER", "auto").strip().lower()
+    if provider not in NARRATIVE_PROVIDERS:
+        raise ConfigError(
+            f"Invalid RETAIL_PULSE_NARRATIVE_PROVIDER={provider!r}; expected one of: "
+            f"{', '.join(NARRATIVE_PROVIDERS)}"
+        )
 
     if env is Environment.DEV:
         db_url = db_url or _DEFAULT_DEV_DB_URL
     else:
-        missing = [
-            name
-            for name, value in (("RETAIL_PULSE_DB_URL", db_url), ("ANTHROPIC_API_KEY", api_key))
-            if not value
-        ]
+        required = [("RETAIL_PULSE_DB_URL", db_url)]
+        if provider != "huggingface":  # Claude is the staging/prod engine unless told otherwise
+            required.append(("ANTHROPIC_API_KEY", api_key))
+        missing = [name for name, value in required if not value]
         if missing:
             raise ConfigError(f"{env.value} requires environment variables: {', '.join(missing)}")
 
@@ -94,6 +114,8 @@ def load_settings() -> Settings:
         anthropic_api_key=api_key,
         model=os.getenv("RETAIL_PULSE_MODEL", _DEFAULT_MODEL),
         log_level=os.getenv("RETAIL_PULSE_LOG_LEVEL", _DEFAULT_LOG_LEVEL[env]).upper(),
+        narrative_provider=provider,
+        hf_model=os.getenv("RETAIL_PULSE_HF_MODEL", _DEFAULT_HF_MODEL),
     )
 
 

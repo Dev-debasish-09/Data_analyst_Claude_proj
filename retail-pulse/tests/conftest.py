@@ -33,6 +33,22 @@ class PlantedAnomalies:
     no_promo_week: int
 
 
+@pytest.fixture(autouse=True)
+def _never_load_a_real_model(request, monkeypatch):
+    """A test must never download or run a real Hugging Face model by accident (GBs, minutes).
+    Only tests marked `local_model` are allowed to."""
+    if request.node.get_closest_marker("local_model"):
+        return
+
+    def blocked(model_id):
+        raise AssertionError(
+            f"Test tried to load the real model {model_id!r}. Inject a fake pipeline_factory, "
+            "or mark the test with @pytest.mark.local_model."
+        )
+
+    monkeypatch.setattr("src.narrative.providers._load_pipeline", blocked)
+
+
 @pytest.fixture(scope="session")
 def db_path(tmp_path_factory) -> Path:
     sys.path.insert(0, str(SCRIPTS_DIR))

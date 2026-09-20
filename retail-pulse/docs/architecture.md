@@ -20,8 +20,9 @@ Retail Pulse converts weekly transaction data into a short analyst report: a hea
 cause, and three recommended actions. It replaces "an analyst interprets the dashboard" with a
 generated first draft that a person still reviews.
 
-**In scope and built:** a synthetic data generator, a data access layer, four metrics, a Claude
-integration with an enforced data boundary, a Streamlit UI, tests, and CI.
+**In scope and built:** a synthetic data generator, a data access layer, four metrics, pluggable
+report engines (the Claude API, or a free local Hugging Face model) behind an enforced data
+boundary, a Streamlit UI, tests, and CI.
 
 **Deliberately not built:** the optional `src/api` backend (the UI calls the layers directly), a
 Dockerfile, and any non-SQLite data source. These belong to later deployment stages.
@@ -38,9 +39,10 @@ flowchart LR
         GUARD{"src/narrative/guard<br/>type allowlist +<br/>shape check"}
         UI["src/ui<br/>Streamlit"]
         AUDIT[/"Audit log<br/>payload sent"/]
+        LOCAL["Local Hugging Face model<br/>runs on this machine"]
     end
-    subgraph outside["OUTSIDE: Anthropic API"]
-        CLAUDE["Claude"]
+    subgraph outside["OUTSIDE the boundary: only when Claude is the engine"]
+        CLAUDE["Claude API"]
     end
 
     DB -->|"SQL, read-only"| DATA
@@ -48,9 +50,11 @@ flowchart LR
     AN --> SUM
     SUM --> UI
     SUM --> GUARD
+    GUARD -->|"pass: aggregates only"| LOCAL
     GUARD -->|"pass: aggregates only"| CLAUDE
     GUARD -.->|"fail: RawDataBoundaryError,<br/>no network call"| UI
     GUARD --> AUDIT
+    LOCAL -->|"headline, cause, 3 actions"| UI
     CLAUDE -->|"headline, cause, 3 actions"| UI
 ```
 
@@ -60,8 +64,9 @@ Reading the diagram:
    household identifiers) exists only inside the boundary.
 2. The analysis layer reduces it to summary objects: a few dozen numbers and short lists.
 3. The UI shows the summaries directly as metric cards. This path never involves the API.
-4. To write a report, the summaries pass through the guard. Only what passes is sent to Claude,
-   and the exact payload is written to an audit log first.
+4. To write a report, the summaries pass through the guard. Only what passes reaches the report
+   engine (a local model on this machine, or Claude across the boundary), and the exact payload is
+   written to an audit log first.
 5. The report comes back and is validated (exactly three actions, no empty fields) before display.
 
 ## 3. Layers
@@ -90,8 +95,16 @@ data layer.
 ### Narrative (`src/narrative/`)
 - `guard.py`: the data-boundary enforcement ([section 4](#4-the-data-boundary-rule)).
 - `generator.py`: `NarrativeGenerator.generate(summaries)`. The only module that imports the
-  Anthropic SDK. Requests a JSON report through a JSON schema, validates it, retries, and maps
-  every failure to a `NarrativeError` subclass.
+  report-writing entry point. It runs the guard, asks the configured engine for a report,
+  validates it (tolerating the code fences and stray sentences small models add around JSON),
+  retries, and maps every failure to a `NarrativeError` subclass.
+- `providers.py`: the engines behind one small interface (`complete(payload, attempt)`).
+  `ClaudeProvider` calls the Anthropic API with a JSON schema. `HuggingFaceProvider` runs a small
+  open model locally through `transformers` (no key, no network at inference time; the model is
+  downloaded once and kept loaded). `create_provider` picks one from settings and loads nothing.
+- `facts.py`: turns the guarded payload into a plain-text fact sheet for small models, which follow
+  a few clear sentences far better than nested JSON. It only reformats figures already in the
+  payload.
 - `prompts.py`: the system prompt (use only the given figures, treat causes as hypotheses, say
   when a comparison is unavailable) and the output schema.
 
@@ -99,18 +112,20 @@ data layer.
 Week and region selectors, four metric cards (total sales, suspected stockouts, promo unit lift,
 top segment), an expandable detail table set, and the report. The report is generated **on
 demand by a button**, not on every widget change, because each one is a paid call. An expander
-shows exactly what would be sent to Claude.
+shows exactly what would be sent to the report engine, and the page names the engine in use.
 
 ### Config (`config/settings.py`)
 See [section 5](#5-environment-and-configuration-strategy).
 
 ## 4. The data-boundary rule
 
-> Raw records never reach the Claude API. Only pre-aggregated summaries do.
+> Raw records never reach a report engine. Only pre-aggregated summaries do.
 
 This is enforced in code at the one place data can leave: `NarrativeGenerator.generate`. The guard
-runs **before any client is created or any network call is made**, so a violation cannot leak a
-partial request.
+runs **before any engine is created, any model is loaded or any network call is made**, so a
+violation cannot leak a partial request. This holds for every engine: the guard sits in front of
+the provider interface, not inside one provider. (A local engine additionally sends nothing off the
+machine, but it still only ever receives aggregates.)
 
 ### What is enforced
 
@@ -166,7 +181,8 @@ convenience.
 |---|---|---|---|
 | Data | Synthetic only | Masked or sampled real data, if approved | Real, aggregated-only to the API |
 | Database | Defaults to local `sqlite:///./local_dev.db` | `RETAIL_PULSE_DB_URL` **required** | `RETAIL_PULSE_DB_URL` **required** |
-| Claude API key | Optional (the report button shows a warning without it) | **Required** | **Required**, company account only |
+| Report engine (`RETAIL_PULSE_NARRATIVE_PROVIDER`) | `auto`: Claude if a key is set, else the free local model | `auto` resolves to Claude; the local model only if explicitly chosen | Same as staging |
+| Claude API key | Optional | **Required** unless the engine is `huggingface` | **Required** unless the engine is `huggingface`; company account only |
 | Log level default | `DEBUG` | `INFO` | `WARNING` |
 | Selected by | `RETAIL_PULSE_ENV=dev` (the default) | `staging` | `prod` |
 
@@ -206,16 +222,19 @@ domain knowledge. Summary:
 - **Analysis.** Unknown week or region raises `AnalysisError`; empty situations (first week, no
   promos, too little history) return well-formed empty summaries with explicit flags such as
   `has_prior_data`, `has_promos`, `has_history`.
-- **Narrative.** The SDK retries 429, 5xx, timeouts and connection errors (3 retries, 60-second
-  timeout). A malformed report (bad JSON, empty fields, not exactly 3 actions) is re-requested
-  once. Authentication, permission, not-found, bad-request, rate-limit, refusal, truncation and
-  connection failures all surface as `NarrativeGenerationError` with a readable message; no SDK
-  exception type escapes.
+- **Narrative.** For Claude, the SDK retries 429, 5xx, timeouts and connection errors (3 retries,
+  60-second timeout). For any engine, a malformed report (bad JSON, empty fields, not exactly 3
+  actions) is re-requested once; the local model's retry samples with a little randomness, since its
+  first attempt is deterministic and would repeat itself. Authentication, permission, not-found,
+  bad-request, rate-limit, refusal, truncation and connection failures, and local-model problems
+  (missing `.[hf]` extras, failed download or load, out of memory), all surface as
+  `NarrativeGenerationError` or `NarrativeConfigError` with a readable message; no SDK or
+  `transformers` exception type escapes.
 - **UI.** Every failure becomes a message on screen. A missing key is a warning, not a crash.
 
 ## 8. Testing and CI
 
-The suite (161 passing tests, plus 1 live test that is skipped without a key) builds its own
+The suite (198 passing tests, plus 2 opt-in tests skipped by default) builds its own
 seeded synthetic database in a temp folder. It does not use `local_dev.db`, the network or an API key.
 
 - **Unit tests** cover the analysis functions against an **answer key** written by the generator
@@ -223,13 +242,16 @@ seeded synthetic database in a temp folder. It does not use `local_dev.db`, the 
   false alarms elsewhere; a normal week; the first week (no prior data); a promo-free week. Totals
   are cross-checked against independent SQL, and the promo lift against a from-scratch
   recalculation. Also: data layer, guard, generator retries/errors, and settings.
-- **Integration tests** run the whole pipeline with Claude replaced by a stand-in that writes its
+- **Integration tests** run the whole pipeline with the engine replaced by a stand-in that writes its
   report from the payload it receives. They assert key terms (region, "stock", department) and that
   figures in the report match the analysis, never exact wording; and that no row-level data
   reaches the model. UI tests drive the Streamlit app headlessly and enforce the layering rule.
 - **Live test** (`pytest -m live`) calls the real API and checks key terms. It has not yet been run.
 - **Mutation check.** During development the code was deliberately broken nine ways (for example a
   noisier stockout threshold, a wrong prior week, a disabled guard rule); every break was caught.
+- **No test can load a real model by accident.** A fixture blocks the real loader (a model is GBs
+  and minutes); the local provider is tested with a fake pipeline and a fake `transformers` module.
+  An opt-in `local_model` test runs the real model.
 - **CI** (`.github/workflows/ci.yml`) runs `ruff check` and `pytest` on Python 3.10 and 3.12 for
   pushes and pull requests. The workflow file sits at the git root because that is where GitHub
   reads it; jobs run inside `retail-pulse/`.
@@ -246,11 +268,23 @@ seeded synthetic database in a temp folder. It does not use `local_dev.db`, the 
 | JSON-schema output plus client-side validation | The schema constrains the format; "exactly three actions" is checked in code |
 | Report on demand | Each report is a paid call; widget changes should not trigger spend |
 | Synthetic answer key in the dev database | Lets tests assert detection against known truth. The table exists only in the dev database |
+| Pluggable report engines behind a small interface | The user had no Anthropic key. Adding an engine is one class; the guard, validation and retries are shared, so every engine gets the same boundary |
+| Free local Hugging Face model as the dev default | No key, no account, and data never leaves the machine, which fits the boundary rule. Cost: a small model is much weaker than Claude (see limitations). It is opt-in through the `hf` extra so CI and lightweight installs do not pull PyTorch |
+| Plain-text fact sheet for the local model | A 1.5B model followed nested JSON poorly and missed the key finding. Leading with the most actionable finding (suspected stockouts) and stating figures in words fixed the planted-anomaly report |
 | Default model `claude-sonnet-5` | A cost/quality starting point, configurable with `RETAIL_PULSE_MODEL`. A more capable, more expensive model may be preferable for report quality and should be evaluated |
 
 ## 10. Known limitations and open items
 
 - The Claude request has not been run against the real API; only against a test double.
+- **The local model is a draft-writer, not an analyst.** It was run for real (Qwen2.5-1.5B-Instruct,
+  CPU, about a minute per report). On the planted anomaly it correctly reports the suspected
+  Beverages stockouts. On an ordinary week it made unsupported statements: it hinted at
+  availability problems although no stockouts were flagged, and said Frozen fell when it rose 34.7%.
+  There is no automatic check that the report's claims match the numbers. Treat local reports as
+  drafts, review them against the metric cards, and use Claude or a larger model
+  (`RETAIL_PULSE_HF_MODEL`) for anything stakeholder-facing.
+- The local engine downloads about 3 GB on first use, needs several GB of free memory, and is CPU
+  only unless a CUDA build of PyTorch is installed.
 - CI is configured but has not yet run on GitHub; Python 3.10 has not been exercised.
 - Synthetic data only. Metric thresholds, especially the stockout baseline, need re-tuning on real
   volumes, and the synthetic data is sparser per store-SKU than a real chain would be.

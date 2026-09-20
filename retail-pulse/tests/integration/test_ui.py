@@ -78,11 +78,31 @@ def test_first_week_and_promo_free_week_degrade_gracefully(planted):
     assert cards(at)["Promo unit lift"].value == "No promos"
 
 
-def test_report_without_an_api_key_shows_a_warning_not_a_crash():
+def test_claude_engine_without_an_api_key_shows_a_warning_not_a_crash(monkeypatch):
+    monkeypatch.setenv("RETAIL_PULSE_NARRATIVE_PROVIDER", "claude")
     at = launch()
     at.button[0].click().run()
     assert not at.exception
-    assert any("API key" in w.value for w in at.warning)
+    assert any("ANTHROPIC_API_KEY" in w.value for w in at.warning)
+
+
+def test_with_no_key_the_local_model_is_the_default_engine_and_writes_the_report(monkeypatch):
+    """No Anthropic key needed: the free local Hugging Face model is used (faked here)."""
+    replies = []
+
+    def fake_pipeline(messages, **kwargs):
+        replies.append(messages)
+        text = '{"headline": "Local headline", "likely_cause": "Local cause.", "recommended_actions": ["a", "b", "c"]}'
+        return [{"generated_text": text}]
+
+    monkeypatch.setattr("src.narrative.providers._load_pipeline", lambda model_id: fake_pipeline)
+    at = launch()
+    assert any("Hugging Face" in c.value for c in at.caption), "the engine in use is shown"
+
+    at.button[0].click().run()
+    assert not at.exception and not at.warning and not at.error
+    assert [s.value for s in at.success] == ["Local headline"]
+    assert replies and "household_id" not in str(replies)
 
 
 def test_report_is_displayed_and_hidden_when_the_selection_changes(monkeypatch):
@@ -100,7 +120,7 @@ def test_report_is_displayed_and_hidden_when_the_selection_changes(monkeypatch):
 
 def test_the_data_sent_to_claude_is_disclosed_and_aggregated():
     at = launch()
-    assert any("What gets sent to Claude" in e.label for e in at.expander)
+    assert any("What gets sent to the report engine" in e.label for e in at.expander)
     assert not at.exception
 
 
