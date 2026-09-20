@@ -9,6 +9,7 @@ misconfigured deployment can never silently fall back to the synthetic dev datab
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
@@ -55,9 +56,14 @@ class Settings:
     def __repr__(self) -> str:  # never leak secrets into logs
         key = "***" if self.anthropic_api_key else None
         return (
-            f"Settings(env={self.env.value!r}, db_url={self.db_url!r}, "
+            f"Settings(env={self.env.value!r}, db_url={_mask_url_password(self.db_url)!r}, "
             f"anthropic_api_key={key!r}, model={self.model!r}, log_level={self.log_level!r})"
         )
+
+
+def _mask_url_password(url: str) -> str:
+    """Hide the password in `scheme://user:password@host/...` URLs (warehouse connections)."""
+    return re.sub(r"(://[^:/@\s]+:)[^@\s]+(@)", r"\1***\2", url)
 
 
 def load_settings() -> Settings:

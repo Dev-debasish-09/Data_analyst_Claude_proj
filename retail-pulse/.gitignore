@@ -21,8 +21,17 @@ htmlcov/
 !config/.env.example
 *.pem
 *.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*.token
 secrets/
 credentials*.json
+
+# --- Logs (audit logs can hold aggregated payloads) ---
+*.log
+logs/
 
 # --- Local databases / data ---
 *.db

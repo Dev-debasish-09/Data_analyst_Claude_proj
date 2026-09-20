@@ -1,0 +1,36 @@
+# Repo-root safety net. The project's own rules live in retail-pulse/.gitignore.
+
+# --- Secrets & credentials (anywhere in the repo) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+secrets/
+credentials*.json
+*.token
+
+# --- Local databases / data extracts ---
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+*.csv
+
+# --- Local tool state (may contain machine paths or permissions) ---
+.claude/settings.local.json
+*.log
+
+# --- Python / OS / IDE ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
